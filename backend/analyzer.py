@@ -1,50 +1,46 @@
-import os
-from pathlib import Path
+import json
 
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from .exceptions import LLMEmptyError, LLMResponseError
 from .schemas import AnalyzeRequest, AnalyzeResponse
 
-load_dotenv()
 
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "system_prompt.txt"
-
-with open(PROMPT_PATH) as f:
-    SYSTEM_PROMPT = f.read()
-
-
-def analyze_text(request: AnalyzeRequest) -> AnalyzeResponse:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
-
-    client = genai.Client(api_key=api_key)
-
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        contents=request.text,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
-        ),
-    )
+def analyze_text(
+    request: AnalyzeRequest,
+    *,
+    client: genai.Client,
+    prompt: str,
+    model: str = "gemini-2.5-flash",
+) -> AnalyzeResponse:
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=request.text,
+            config=types.GenerateContentConfig(
+                system_instruction=prompt,
+                response_mime_type="application/json",
+            ),
+        )
+    except Exception as e:
+        status = getattr(e, "code", None) or getattr(e, "status_code", None)
+        raise LLMResponseError(
+            f"Gemini API error (HTTP {status}): {e}"
+        ) from e
 
     raw = response.text
     if not raw:
-        raise ValueError(
-            "Gemini returned an empty response. "
-            "The model may have been blocked."
+        raise LLMEmptyError(
+            "Gemini returned an empty response. The model may have been blocked."
         )
 
-    import json
     try:
         data = json.loads(raw)
         result = AnalyzeResponse(**data)
         result.summary.total = sum(result.summary.by_type.values())
         return result
-    except (json.JSONDecodeError, Exception) as e:
-        raise ValueError(
-            f"Failed to parse Gemini response. Raw text: {raw[:500]}"
+    except json.JSONDecodeError as e:
+        raise LLMResponseError(
+            "Failed to parse Gemini response as JSON.", raw[:500]
         ) from e

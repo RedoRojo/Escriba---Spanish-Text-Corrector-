@@ -23,6 +23,8 @@ const popoverExplanation = document.getElementById('popover-explanation');
 const popoverAccept = document.getElementById('popover-accept');
 const popoverIgnore = document.getElementById('popover-ignore');
 
+/* ── Error type registry (populated from API on load) ── */
+let errorTypeRegistry = {};
 /* ── State ── */
 let currentText = '';
 let errors = [];
@@ -30,13 +32,25 @@ let errorStates = [];       // { status: 'pending'|'accepted'|'ignored', error }
 let errorPositions = [];    // { start, end, index }
 let activeErrorIndex = -1;
 
-const TYPE_LABELS = {
-  ortografía: 'Ortografía',
-  gramática: 'Gramática',
-  puntuación: 'Puntuación',
-  semántica: 'Semántica',
-  estilo: 'Estilo',
-};
+function labelFor(type) {
+  return (errorTypeRegistry[type] && errorTypeRegistry[type].label) || type;
+}
+function colorsFor(type) {
+  return errorTypeRegistry[type] || { badge_bg: '#FEE2E2', badge_text: '#DC2626', dot: '#DC2626' };
+}
+
+/* ── Init: fetch error types from API ── */
+async function initErrorTypes() {
+  try {
+    const res = await fetch('/error-types');
+    if (res.ok) {
+      const data = await res.json();
+      for (const t of data.types) {
+        errorTypeRegistry[t.type] = { label: t.label, colors: t.colors };
+      }
+    }
+  } catch (_) { /* use defaults */ }
+}
 
 /* ── Events ── */
 textInput.addEventListener('input', updateCounter);
@@ -45,6 +59,8 @@ copyBtn.addEventListener('click', handleCopy);
 popoverAccept.addEventListener('click', () => resolveError('accepted'));
 popoverIgnore.addEventListener('click', () => resolveError('ignored'));
 document.addEventListener('click', handleDocClick);
+
+initErrorTypes();
 
 /* ── Counter ── */
 function updateCounter() {
@@ -89,8 +105,12 @@ async function handleAnalyze() {
     });
 
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || `Error ${res.status}`);
+      let detail = `Error ${res.status}`;
+      try {
+        const errBody = await res.json();
+        if (errBody.detail) detail = errBody.detail;
+      } catch (_) { /* ignore parse failure */ }
+      throw new Error(detail);
     }
 
     const data = await res.json();
@@ -224,7 +244,7 @@ function openPopover(idx, anchorEl) {
   activeErrorIndex = idx;
   const err = errors[idx];
 
-  popoverType.textContent = TYPE_LABELS[err.type] || err.type;
+  popoverType.textContent = labelFor(err.type);
   popoverErrNum.textContent = `${idx + 1} / ${errors.length}`;
   popoverOriginal.textContent = err.original;
   popoverCorrection.textContent = err.correction;
